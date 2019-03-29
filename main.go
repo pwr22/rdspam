@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/c2h5oh/datasize"
-	"github.com/kbjorklu/xoshiro"
+	"github.com/jes/lfsr64"
 	flag "github.com/spf13/pflag"
 )
 
@@ -58,7 +58,7 @@ func writeData() {
 
 // r is the source of randomness used for data generation.
 // TODO Allow this to be seeded.
-var r = xoshiro.NewXoshiro256StarStar(99)
+var r = lfsr64.NewLfsr64(99)
 
 // genDataChunk generates the next chunk of random data in c.
 func genDataChunk(c []byte) {
