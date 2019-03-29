@@ -14,7 +14,7 @@ import (
 
 const version = "v0.0.1"
 
-var size = flag.IntP("size", "s", 0, "number of bytes to write or 0 to keep going forever")
+var size = flag.IntP("size", "s", 0, "number of bytes to write or 0 (default) to keep going forever")
 var printVersion = flag.BoolP("version", "V", false, "print version information")
 var seed = flag.Int64P("seed", "S", 0, "seed to use for the data source (defaults to the current time)")
 
