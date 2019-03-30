@@ -38,7 +38,7 @@ bench_tmpfs_file_pv="./$cmd -s $size | pv > $tmpfs_file"
 bench_tmpfs_file_cat="./$cmd -s $size | cat - > $tmpfs_file"
 
 echo
-echo "file benchmarks"
+echo "tmpfs file benchmarks - assuming /tmp is one"
 echo
 
 echo $bench_tmpfs_file_direct
@@ -63,7 +63,7 @@ bench_reg_file_pv="./$cmd -s $size | pv > $reg_file"
 bench_reg_file_cat="./$cmd -s $size | cat - > $reg_file"
 
 echo
-echo "file benchmarks"
+echo "regular file benchmarks"
 echo
 
 echo $bench_reg_file_direct
