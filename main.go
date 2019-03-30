@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"time"
@@ -44,13 +45,13 @@ func main() {
 		*seed = int64(rand.Uint64())
 	}
 
-	writeData()
+	writeData(int(bytesToWrite), *seed, os.Stdout)
 }
 
 // writeData writes the requested amount of random data to stdout then returns.
 // If *size == 0 then it will keep generating forever and never return.
-func writeData() {
-	rndSrc := xoshiro.NewXoshiro256StarStar(*seed)
+func writeData(size int, seed int64, out io.Writer) {
+	rndSrc := xoshiro.NewXoshiro256StarStar(seed)
 	buf := make([]byte, bufLen)
 	bytesWritten := 0
 
@@ -59,8 +60,8 @@ func writeData() {
 		genDataChunk(buf, rndSrc)
 
 		// handle the last write potentially being smaller and exit
-		if bytesToWrite > 0 && int(bytesToWrite)-bytesWritten <= len(buf) {
-			n, err := os.Stdout.Write(buf[:int(bytesToWrite)-bytesWritten])
+		if size > 0 && size-bytesWritten <= len(buf) {
+			n, err := out.Write(buf[:size-bytesWritten])
 			bytesWritten += n
 
 			if err != nil {
@@ -69,7 +70,7 @@ func writeData() {
 
 			break
 		} else { // or do a full write an count the bytes
-			n, err := os.Stdout.Write(buf)
+			n, err := out.Write(buf)
 			bytesWritten += n
 
 			if err != nil {
