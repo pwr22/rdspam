@@ -52,18 +52,34 @@ func writeData() {
 	buf := make([]byte, bufLen)
 	bytesWritten := 0
 
+	startTime := time.Now()
 	for {
 		genDataChunk(buf, rndSrc)
 
 		// handle the last write potentially being smaller and exit
 		if *size > 0 && *size-bytesWritten <= len(buf) {
-			os.Stdout.Write(buf[:*size-bytesWritten])
+			n, err := os.Stdout.Write(buf[:*size-bytesWritten])
+			bytesWritten += n
+
+			if err != nil {
+				panic(err)
+			}
+
 			break
 		} else { // or do a full write an count the bytes
-			os.Stdout.Write(buf)
-			bytesWritten += len(buf)
+			n, err := os.Stdout.Write(buf)
+			bytesWritten += n
+
+			if err != nil {
+				panic(err)
+			}
 		}
 	}
+
+	// emit statistics
+	duration := time.Now().Sub(startTime)
+	bytesPerS := datasize.ByteSize(float64(bytesWritten) / duration.Seconds())
+	fmt.Fprintf(os.Stderr, "wrote %s in %v at an average of %s/s\n", datasize.ByteSize(bytesWritten).HR(), duration, bytesPerS.HR())
 }
 
 // genDataChunk generates the next chunk of random data in c.
