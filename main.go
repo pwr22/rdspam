@@ -14,9 +14,11 @@ import (
 
 const version = "v0.0.1"
 
-var size = flag.IntP("size", "s", 0, "number of bytes to write or 0 (default) to keep going forever")
+var size = flag.StringP("size", "s", "0", "number of bytes to write or 0 (default) to keep going forever")
 var printVersion = flag.BoolP("version", "V", false, "print version information")
 var seed = flag.Int64P("seed", "S", 0, "seed to use for the data source (defaults to the current time)")
+
+var bytesToWrite datasize.ByteSize
 
 // TODO optimise for different output types?
 const bufLen = 64 * datasize.KB // optimised for piping
@@ -32,8 +34,8 @@ func main() {
 		return
 	}
 
-	if *size < 0 {
-		fmt.Fprintf(os.Stderr, "size must be greater than 0 but you gave %v\n", *size)
+	if err := bytesToWrite.UnmarshalText([]byte(*size)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 
@@ -57,8 +59,8 @@ func writeData() {
 		genDataChunk(buf, rndSrc)
 
 		// handle the last write potentially being smaller and exit
-		if *size > 0 && *size-bytesWritten <= len(buf) {
-			n, err := os.Stdout.Write(buf[:*size-bytesWritten])
+		if bytesToWrite > 0 && int(bytesToWrite)-bytesWritten <= len(buf) {
+			n, err := os.Stdout.Write(buf[:int(bytesToWrite)-bytesWritten])
 			bytesWritten += n
 
 			if err != nil {
