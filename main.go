@@ -1,6 +1,7 @@
 package main
 
 import (
+	crand "crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -18,7 +19,7 @@ const version = "v0.0.1"
 
 var size = flag.StringP("size", "s", "0", "number of bytes to write or 0 (default) to keep going forever")
 var printVersion = flag.BoolP("version", "V", false, "print version information")
-var seed = flag.Int64P("seed", "S", 0, "seed to use for the data source (defaults to the current time)")
+var seed = flag.Int64P("seed", "S", 0, "seed to use for the data source except for go-crypto (defaults to the current time)")
 var randSrc = flag.StringP("rand-source", "r", "xoshiro256**", fmt.Sprintf("source to use for random data, one of: %v", getAllowedRandSrcs()))
 
 var bytesToWrite datasize.ByteSize
@@ -28,7 +29,7 @@ const genBufLen = 4 * datasize.MB  // optimised minimising channel overheads
 const writeSize = 64 * datasize.KB // optimised for piping
 const buffers = 2                  // there doesn't seem to be any benefit of raising this as we're bottle necked on data generation anyway
 
-var randSrcs = map[string]bool{"xoshiro256**": true}
+var randSrcs = map[string]bool{"xoshiro256**": true, "go-math": true, "go-crypto": true}
 
 func getAllowedRandSrcs() string {
 	keys := make([]string, 0, len(randSrcs))
@@ -60,6 +61,9 @@ func main() {
 	if *seed == 0 { // if not set or user gave 0 - xoshiro256** doesn't like 0
 		rand.Seed(time.Now().UnixNano())
 		*seed = int64(rand.Uint64())
+	} else if *randSrc == "go-crypto" {
+		fmt.Fprintln(os.Stderr, "go-crypto cannot be seeded")
+		os.Exit(2)
 	}
 
 	if _, ok := randSrcs[*randSrc]; !ok {
@@ -92,8 +96,12 @@ func startGenerating(size int, seed int64) (chan []byte, chan []byte) {
 	// an upside is we'll be able to support different generator interfaces without wrappers!
 	if *randSrc == "xoshiro256**" {
 		go genXoshiro256StarStar(size, seed, bufIn, bufOut)
+	} else if *randSrc == "go-math" {
+		go genMath(size, seed, bufIn, bufOut)
+	} else if *randSrc == "go-crypto" {
+		go genCrypto(size, seed, bufIn, bufOut)
 	} else {
-		panic(fmt.Errorf("Unsupport random data source %v", *randSrc))
+		panic(fmt.Errorf("Unsupported random data source %v", *randSrc))
 	}
 
 	return bufIn, bufOut
@@ -122,6 +130,59 @@ func genXoshiro256StarStar(size int, seed int64, bufIn, bufOut chan []byte) {
 		}
 
 		bufOut <- buf
+	}
+
+	close(bufOut) // signal the writer that we're done
+	// we can't close bufIn as it may still be putting back
+}
+
+// genMath reads in buffers, fills them with random data from math/rand and sends them back out.
+// It closes the bufOut channel to signal when it's done generating data
+func genMath(size int, seed int64, bufIn, bufOut chan []byte) {
+	rand := rand.New(rand.NewSource(seed))
+	bytes := 0
+
+	lastBufferAfter := size - int(genBufLen)
+	for buf := range bufIn {
+		// handle the last buffer potentially needing to be smaller and finishing up
+		if size > 0 && bytes >= lastBufferAfter {
+			buf = buf[:size-bytes] // just shrink the buffer / harmless if its good already
+			rand.Read(buf)
+
+			bufOut <- buf
+			break
+		} else {
+			rand.Read(buf)
+			bytes += len(buf)
+
+			bufOut <- buf
+		}
+	}
+
+	close(bufOut) // signal the writer that we're done
+	// we can't close bufIn as it may still be putting back
+}
+
+// genCrypto reads in buffers, fills them with random data from crypto/rand and sends them back out.
+// It closes the bufOut channel to signal when it's done generating data
+func genCrypto(size int, seed int64, bufIn, bufOut chan []byte) {
+	bytes := 0
+
+	lastBufferAfter := size - int(genBufLen)
+	for buf := range bufIn {
+		// handle the last buffer potentially needing to be smaller and finishing up
+		if size > 0 && bytes >= lastBufferAfter {
+			buf = buf[:size-bytes] // just shrink the buffer / harmless if its good already
+			crand.Read(buf)
+
+			bufOut <- buf
+			break
+		} else {
+			crand.Read(buf)
+			bytes += len(buf)
+
+			bufOut <- buf
+		}
 	}
 
 	close(bufOut) // signal the writer that we're done
