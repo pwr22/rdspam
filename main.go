@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/c2h5oh/datasize"
@@ -18,6 +19,7 @@ const version = "v0.0.1"
 var size = flag.StringP("size", "s", "0", "number of bytes to write or 0 (default) to keep going forever")
 var printVersion = flag.BoolP("version", "V", false, "print version information")
 var seed = flag.Int64P("seed", "S", 0, "seed to use for the data source (defaults to the current time)")
+var randSrc = flag.StringP("rand-source", "r", "xoshiro256**", fmt.Sprintf("source to use for random data, one of: %v", getAllowedRandSrcs()))
 
 var bytesToWrite datasize.ByteSize
 
@@ -25,6 +27,19 @@ var bytesToWrite datasize.ByteSize
 const genBufLen = 4 * datasize.MB  // optimised minimising channel overheads
 const writeSize = 64 * datasize.KB // optimised for piping
 const buffers = 2                  // there doesn't seem to be any benefit of raising this as we're bottle necked on data generation anyway
+
+var randSrcs = map[string]func(int64) rand.Source64{"xoshiro256**": func(seed int64) rand.Source64 {
+	return xoshiro.NewXoshiro256StarStar(seed)
+}}
+
+func getAllowedRandSrcs() string {
+	keys := make([]string, 0, len(randSrcs))
+	for k := range randSrcs {
+		keys = append(keys, k)
+	}
+
+	return strings.Join(keys, " ")
+}
 
 // main will parse flags, do anything needed there then start the generator and writer
 // If *size == 0 then it will go on forever.
@@ -44,9 +59,14 @@ func main() {
 		os.Exit(2)
 	}
 
-	if *seed == 0 { // if not set or user gave 0 - xoroshift doesn't like 0
+	if *seed == 0 { // if not set or user gave 0 - xoshiro256** doesn't like 0
 		rand.Seed(time.Now().UnixNano())
 		*seed = int64(rand.Uint64())
+	}
+
+	if _, ok := randSrcs[*randSrc]; !ok {
+		fmt.Fprintf(os.Stderr, "%v is not a supported random data source - must be one of: %v\n", *randSrc, getAllowedRandSrcs())
+		os.Exit(2)
 	}
 
 	writeData(int(bytesToWrite), *seed, os.Stdout)
@@ -77,7 +97,9 @@ func startGenerating(size int, seed int64) (chan []byte, chan []byte) {
 // genData reads in buffers, fills them with random data and sends them back out.
 // It closes the bufOut channel to signal when it's done generating data
 func genData(size int, seed int64, bufIn, bufOut chan []byte) {
-	rndSrc := xoshiro.NewXoshiro256StarStar(seed)
+	// its much slower to call interface methods than concrete type ones and our main bottle neck is in the calls to Source64.Uint64.
+	// so we make this concrete here to work around that - it means we'll have to have a generator per type probably
+	rndSrc := randSrcs[*randSrc](seed).(*xoshiro.Xoshiro256StarStar)
 	bytes := 0
 
 	for buf := range bufIn {
