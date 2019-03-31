@@ -28,7 +28,7 @@ const genBufLen = 4 * datasize.MB  // optimised minimising channel overheads
 const writeSize = 64 * datasize.KB // optimised for piping
 const buffers = 2                  // there doesn't seem to be any benefit of raising this as we're bottle necked on data generation anyway
 
-var randSrcs = map[string]bool{"xoshiro256**": true}
+var randSrcs = map[string]bool{"xoshiro256**": true, "go-math": true}
 
 func getAllowedRandSrcs() string {
 	keys := make([]string, 0, len(randSrcs))
@@ -92,8 +92,10 @@ func startGenerating(size int, seed int64) (chan []byte, chan []byte) {
 	// an upside is we'll be able to support different generator interfaces without wrappers!
 	if *randSrc == "xoshiro256**" {
 		go genXoshiro256StarStar(size, seed, bufIn, bufOut)
+	} else if *randSrc == "go-math" {
+		go genMath(size, seed, bufIn, bufOut)
 	} else {
-		panic(fmt.Errorf("Unsupport random data source %v", *randSrc))
+		panic(fmt.Errorf("Unsupported random data source %v", *randSrc))
 	}
 
 	return bufIn, bufOut
@@ -122,6 +124,33 @@ func genXoshiro256StarStar(size int, seed int64, bufIn, bufOut chan []byte) {
 		}
 
 		bufOut <- buf
+	}
+
+	close(bufOut) // signal the writer that we're done
+	// we can't close bufIn as it may still be putting back
+}
+
+// genMath reads in buffers, fills them with random data from math/rand and sends them back out.
+// It closes the bufOut channel to signal when it's done generating data
+func genMath(size int, seed int64, bufIn, bufOut chan []byte) {
+	rand := rand.New(rand.NewSource(seed))
+	bytes := 0
+
+	lastBufferAfter := size - int(genBufLen)
+	for buf := range bufIn {
+		// handle the last buffer potentially needing to be smaller and finishing up
+		if size > 0 && bytes >= lastBufferAfter {
+			buf = buf[:size-bytes] // just shrink the buffer / harmless if its good already
+			rand.Read(buf)
+
+			bufOut <- buf
+			break
+		} else {
+			rand.Read(buf)
+			bytes += len(buf)
+
+			bufOut <- buf
+		}
 	}
 
 	close(bufOut) // signal the writer that we're done
