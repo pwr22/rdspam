@@ -22,12 +22,16 @@ var seed = flag.Int64P("seed", "S", 0, "seed to use for the data source (default
 var bytesToWrite datasize.ByteSize
 
 // TODO optimise for different output types?
-const bufLen = 64 * datasize.KB // optimised for piping
+const genBufLen = 4 * datasize.MB  // optimised minimising channel overheads
+const writeSize = 64 * datasize.KB // optimised for piping
+const buffers = 2                  // there doesn't seem to be any benefit of raising this as we're bottle necked on data generation anyway
 
-// main will parse flags, do anything needed there then start writing out data as requested.
+// main will parse flags, do anything needed there then start the generator and writer
 // If *size == 0 then it will go on forever.
-// TODO Sequential for now, use goroutines for concurrency.
 func main() {
+	// uncomment for cpu profiling
+	// defer profile.Start().Stop()
+
 	flag.Parse()
 
 	if *printVersion {
@@ -48,46 +52,98 @@ func main() {
 	writeData(int(bytesToWrite), *seed, os.Stdout)
 }
 
-// writeData writes the requested amount of random data to stdout then returns.
+// writeData writes the requested amount of random data to out then returns.
 // If *size == 0 then it will keep generating forever and never return.
 func writeData(size int, seed int64, out io.Writer) {
+	dataIn, dataOut := startGenerating(size, seed)
+	writesDone := startWriting(out, dataOut, dataIn)
+
+	<-writesDone
+}
+
+// startGenerating starts up a goroutine to generate data in buffers and returns channels to receive and return these
+func startGenerating(size int, seed int64) (chan []byte, chan []byte) {
+	bufIn, bufOut := make(chan []byte, buffers), make(chan []byte, buffers)
+
+	for i := 0; i < buffers; i++ {
+		bufIn <- make([]byte, genBufLen)
+	}
+
+	go genData(size, seed, bufIn, bufOut)
+
+	return bufIn, bufOut
+}
+
+// genData reads in buffers, fills them with random data and sends them back out.
+// It closes the bufOut channel to signal when it's done generating data
+func genData(size int, seed int64, bufIn, bufOut chan []byte) {
 	rndSrc := xoshiro.NewXoshiro256StarStar(seed)
-	buf := make([]byte, bufLen)
-	bytesWritten := 0
+	bytes := 0
 
-	startTime := time.Now()
-	for {
-		genDataChunk(buf, rndSrc)
+	for buf := range bufIn {
+		// fill the buffer
+		for i := 0; i < len(buf); i += 8 {
+			b := buf[i:] // if not doing this in a separate statement things are slower!
+			binary.LittleEndian.PutUint64(b, rndSrc.Uint64())
+		}
+		bytes += len(buf)
 
-		// handle the last write potentially being smaller and exit
-		if size > 0 && size-bytesWritten <= len(buf) {
-			n, err := out.Write(buf[:size-bytesWritten])
-			bytesWritten += n
-
-			if err != nil {
-				panic(err)
-			}
-
+		// handle the last buffer potentially needing to be smaller and finishing up
+		if size > 0 && bytes >= size {
+			s := size + int(genBufLen) - bytes // work out how much of this block we want
+			buf = buf[:s]                      // just shrink the buffer / harmless if its good already
+			bufOut <- buf
 			break
-		} else { // or do a full write an count the bytes
-			n, err := out.Write(buf)
-			bytesWritten += n
+		}
+
+		bufOut <- buf
+	}
+
+	close(bufOut) // signal the writer that we're done
+	// we can't close bufIn as it may still be putting back
+}
+
+func startWriting(out io.Writer, dataIn, bufReturn chan []byte) chan bool {
+	done := make(chan bool)
+	go writeBuffers(out, dataIn, bufReturn, done)
+	return done
+}
+
+// writeBuffers reads buffers, writes them to out and then returns the buffer.
+// It signals on done when finished
+func writeBuffers(out io.Writer, bufIn, bufOut chan []byte, done chan bool) {
+	total := 0
+	startTime := time.Now()
+
+	for b := range bufIn {
+		offset, writeSize := 0, int(writeSize)
+
+		// write out all but the last blocks - these will all be full writeLen.
+		// len(b)-writeSize is the last point where we could do a full writeLen (<0 for sizes < writeLen)
+		for ; offset < len(b)-writeSize; offset += writeSize {
+			n, err := out.Write(b[offset : offset+writeSize])
+			total += n
 
 			if err != nil {
 				panic(err)
 			}
 		}
+
+		// write the last chunk whatever size it is
+		n, err := out.Write(b[offset:])
+		total += n
+
+		if err != nil {
+			panic(err)
+		}
+
+		bufOut <- b
 	}
 
 	// emit statistics
 	duration := time.Now().Sub(startTime)
-	bytesPerS := datasize.ByteSize(float64(bytesWritten) / duration.Seconds())
-	fmt.Fprintf(os.Stderr, "wrote %s in %v at an average of %s/s\n", datasize.ByteSize(bytesWritten).HR(), duration, bytesPerS.HR())
-}
+	bytesPerS := datasize.ByteSize(float64(total) / duration.Seconds())
+	fmt.Fprintf(os.Stderr, "wrote %s in %v at an average of %s/s\n", datasize.ByteSize(total).HR(), duration, bytesPerS.HR())
 
-// genDataChunk generates the next chunk of random data in c.
-func genDataChunk(c []byte, r *xoshiro.Xoshiro256StarStar) {
-	for i := 0; i < len(c); i += 8 {
-		binary.LittleEndian.PutUint64(c[i:], r.Uint64())
-	}
+	done <- true
 }
