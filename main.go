@@ -56,9 +56,7 @@ func main() {
 // If *size == 0 then it will keep generating forever and never return.
 func writeData(size int, seed int64, out io.Writer) {
 	dataIn, dataOut := startGenerating(size, seed)
-
-	writesDone := make(chan bool, 1)
-	go writeBuffers(out, dataOut, dataIn, writesDone)
+	writesDone := startWriting(out, dataOut, dataIn)
 
 	<-writesDone
 }
@@ -103,6 +101,12 @@ func genData(size int, seed int64, bufIn, bufOut chan []byte) {
 
 	close(bufOut) // signal the writer that we're done
 	// we can't close bufIn as it may still be putting back
+}
+
+func startWriting(out io.Writer, dataIn, bufReturn chan []byte) chan bool {
+	done := make(chan bool)
+	go writeBuffers(out, dataIn, bufReturn, done)
+	return done
 }
 
 // writeBuffers reads buffers, writes them to out and then returns the buffer.
