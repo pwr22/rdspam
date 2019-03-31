@@ -15,7 +15,7 @@ import (
 	flag "github.com/spf13/pflag"
 )
 
-const version = "v0.0.1"
+const version = "v0.0.2"
 
 var size = flag.StringP("size", "s", "0", "number of bytes to write or 0 (default) to keep going forever")
 var printVersion = flag.BoolP("version", "V", false, "print version information")
