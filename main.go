@@ -28,9 +28,7 @@ const genBufLen = 4 * datasize.MB  // optimised minimising channel overheads
 const writeSize = 64 * datasize.KB // optimised for piping
 const buffers = 2                  // there doesn't seem to be any benefit of raising this as we're bottle necked on data generation anyway
 
-var randSrcs = map[string]func(int64) rand.Source64{"xoshiro256**": func(seed int64) rand.Source64 {
-	return xoshiro.NewXoshiro256StarStar(seed)
-}}
+var randSrcs = map[string]bool{"xoshiro256**": true}
 
 func getAllowedRandSrcs() string {
 	keys := make([]string, 0, len(randSrcs))
@@ -89,17 +87,22 @@ func startGenerating(size int, seed int64) (chan []byte, chan []byte) {
 		bufIn <- make([]byte, genBufLen)
 	}
 
-	go genData(size, seed, bufIn, bufOut)
+	// its much slower to call interface methods than concrete type ones and our main bottle neck is in the calls to Source64.Uint64.
+	// so we make this concrete here to work around that - it means we'll have to have a generator per type probably.
+	// an upside is we'll be able to support different generator interfaces without wrappers!
+	if *randSrc == "xoshiro256**" {
+		go genXoshiro256StarStar(size, seed, bufIn, bufOut)
+	} else {
+		panic(fmt.Errorf("Unsupport random data source %v", *randSrc))
+	}
 
 	return bufIn, bufOut
 }
 
-// genData reads in buffers, fills them with random data and sends them back out.
+// genXoshiro256StarStar reads in buffers, fills them with random data and sends them back out.
 // It closes the bufOut channel to signal when it's done generating data
-func genData(size int, seed int64, bufIn, bufOut chan []byte) {
-	// its much slower to call interface methods than concrete type ones and our main bottle neck is in the calls to Source64.Uint64.
-	// so we make this concrete here to work around that - it means we'll have to have a generator per type probably
-	rndSrc := randSrcs[*randSrc](seed).(*xoshiro.Xoshiro256StarStar)
+func genXoshiro256StarStar(size int, seed int64, bufIn, bufOut chan []byte) {
+	rndSrc := xoshiro.NewXoshiro256StarStar(seed)
 	bytes := 0
 
 	for buf := range bufIn {
