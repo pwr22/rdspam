@@ -17,18 +17,7 @@ func BenchmarkXoshiro64Bits(b *testing.B) {
 		rndSrc.Uint64()
 	}
 }
-
-func BenchmarkGenChunk(b *testing.B) {
-	buf := make([]byte, bufLen)
-	rndSrc := xoshiro.NewXoshiro256StarStar(11)
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		genDataChunk(buf, rndSrc)
-	}
-}
-
-func BenchmarkWriteDataDiscar(b *testing.B) {
+func BenchmarkWriteDataDiscard(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		writeData(int(4*datasize.MB), 11, ioutil.Discard)
 	}
