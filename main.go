@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -19,8 +20,9 @@ const version = "v0.0.2"
 
 var size = flag.StringP("size", "s", "0", "number of bytes to write or 0 (default) to keep going forever")
 var printVersion = flag.BoolP("version", "V", false, "print version information")
-var seed = flag.Int64P("seed", "S", 0, "seed to use for the data source except for go-crypto (defaults to the current time)")
+var seed = flag.Int64P("seed", "S", 0, "seed to use for the random data source except for go-crypto (defaults to the current time)")
 var randSrc = flag.StringP("rand-source", "r", "xoshiro256**", fmt.Sprintf("source to use for random data, one of: %v", getAllowedRandSrcs()))
+var interleave = flag.UintP("interleave-streams", "i", 0, "number of parallel random data streams to generate or 0 (default) for the number of CPUs")
 
 var bytesToWrite datasize.ByteSize
 
@@ -71,14 +73,30 @@ func main() {
 		os.Exit(2)
 	}
 
-	writeData(int(bytesToWrite), *seed, os.Stdout)
+	if *interleave == 0 {
+		*interleave = uint(runtime.GOMAXPROCS(0))
+	}
+
+	writeData(int(bytesToWrite), *seed, int(*interleave), os.Stdout)
 }
 
 // writeData writes the requested amount of random data to out then returns.
 // If *size == 0 then it will keep generating forever and never return.
-func writeData(size int, seed int64, out io.Writer) {
-	dataIn, dataOut := startGenerating(size, seed)
-	writesDone := startWriting(out, dataOut, dataIn)
+func writeData(size int, seed int64, streams int, out io.Writer) {
+	dataIns := make([]chan []byte, streams)
+	dataOuts := make([]chan []byte, streams)
+
+	sizePerStream := size / streams
+	sizeLeft := size % streams // have to add this to one of the streams
+
+	// start up all the generators
+	i := 0
+	for ; i < streams-1; i++ {
+		dataIns[i], dataOuts[i] = startGenerating(sizePerStream, seed+int64(i))
+	}
+	dataIns[i], dataOuts[i] = startGenerating(sizePerStream+sizeLeft, seed+int64(i)) // last stream generates the extra bytes
+
+	writesDone := startWriting(out, dataOuts, dataIns)
 
 	<-writesDone
 }
@@ -189,41 +207,52 @@ func genCrypto(size int, seed int64, bufIn, bufOut chan []byte) {
 	// we can't close bufIn as it may still be putting back
 }
 
-func startWriting(out io.Writer, dataIn, bufReturn chan []byte) chan bool {
+func startWriting(out io.Writer, dataIns, bufReturns []chan []byte) chan bool {
 	done := make(chan bool)
-	go writeBuffers(out, dataIn, bufReturn, done)
+	go writeBuffers(out, dataIns, bufReturns, done)
 	return done
 }
 
 // writeBuffers reads buffers, writes them to out and then returns the buffer.
 // It signals on done when finished
-func writeBuffers(out io.Writer, bufIn, bufOut chan []byte, done chan bool) {
+func writeBuffers(out io.Writer, bufIns, bufOuts []chan []byte, done chan bool) {
 	total := 0
 	startTime := time.Now()
 
-	for b := range bufIn {
-		offset, writeSize := 0, int(writeSize)
+	for moreData := true; moreData; {
+		for i := 0; i < len(bufIns); i++ {
+			var b []byte
+			// the last generator is the only one that can potentially generate one more block
+			// so we can set moreData like this and it will be reset to true if we need to iterate again
+			b, moreData = <-bufIns[i]
 
-		// write out all but the last blocks - these will all be full writeLen.
-		// len(b)-writeSize is the last point where we could do a full writeLen (<0 for sizes < writeLen)
-		for ; offset < len(b)-writeSize; offset += writeSize {
-			n, err := out.Write(b[offset : offset+writeSize])
+			// this generator is done
+			if !moreData {
+				continue
+			}
+
+			// write out all but the last blocks - these will all be full writeLen.
+			// len(b)-writeSize is the last point where we could do a full writeLen (<0 for sizes < writeLen)
+			offset, writeSize := 0, int(writeSize)
+			for ; offset < len(b)-writeSize; offset += writeSize {
+				n, err := out.Write(b[offset : offset+writeSize])
+				total += n
+
+				if err != nil {
+					panic(err)
+				}
+			}
+
+			// write the last chunk whatever size it is
+			n, err := out.Write(b[offset:])
 			total += n
 
 			if err != nil {
 				panic(err)
 			}
+
+			bufOuts[i] <- b
 		}
-
-		// write the last chunk whatever size it is
-		n, err := out.Write(b[offset:])
-		total += n
-
-		if err != nil {
-			panic(err)
-		}
-
-		bufOut <- b
 	}
 
 	// emit statistics
