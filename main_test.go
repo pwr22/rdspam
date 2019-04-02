@@ -3,6 +3,7 @@ package main
 import (
 	"io/ioutil"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/c2h5oh/datasize"
@@ -18,12 +19,15 @@ func BenchmarkXoshiro64Bits(b *testing.B) {
 	}
 }
 func BenchmarkWriteDataDiscard(b *testing.B) {
+	streams := runtime.GOMAXPROCS(0)
 	for i := 0; i < b.N; i++ {
-		writeData(int(4*datasize.MB), 11, ioutil.Discard)
+		writeData(int(4*datasize.MB), 11, streams, ioutil.Discard)
 	}
 }
 
 func BenchmarkWriteDataDevNull(b *testing.B) {
+	streams := runtime.GOMAXPROCS(0)
+
 	out, err := os.Create(os.DevNull)
 	if err != nil {
 		b.Fatal(err)
@@ -32,6 +36,6 @@ func BenchmarkWriteDataDevNull(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		writeData(int(4*datasize.MB), 11, out)
+		writeData(int(4*datasize.MB), 11, streams, out)
 	}
 }
