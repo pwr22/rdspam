@@ -25,9 +25,10 @@ var randSrc = flag.StringP("rand-source", "r", "xoshiro256**", fmt.Sprintf("sour
 var bytesToWrite datasize.ByteSize
 
 // TODO optimise for different output types?
-const genBufLen = 4 * datasize.MB  // optimised minimising channel overheads
-const writeSize = 64 * datasize.KB // optimised for piping
-const buffers = 2                  // there doesn't seem to be any benefit of raising this as we're bottle necked on data generation anyway
+const genBufLen = 4 * datasize.MB // optimised minimising channel overheads
+const pipeWriteSize = 64 * datasize.KB
+const fileWriteSize = genBufLen
+const buffers = 2 // there doesn't seem to be any benefit of raising this as we're bottle necked on data generation anyway
 
 var randSrcs = map[string]bool{"xoshiro256**": true, "go-math": true, "go-crypto": true}
 
@@ -200,6 +201,20 @@ func startWriting(out io.Writer, dataIn, bufReturn chan []byte) chan bool {
 func writeBuffers(out io.Writer, bufIn, bufOut chan []byte, done chan bool) {
 	total := 0
 	startTime := time.Now()
+	writeSize := fileWriteSize
+
+	// work out if we're writing to a pipe
+	if f, ok := out.(*os.File); ok {
+		fi, err := f.Stat()
+		if err != nil {
+			panic(err)
+		}
+
+		// going beyond the size of the pipe is slower
+		if fi.Mode()&os.ModeNamedPipe != 0 {
+			writeSize = pipeWriteSize
+		}
+	}
 
 	for b := range bufIn {
 		offset, writeSize := 0, int(writeSize)
